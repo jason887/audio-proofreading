@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>潮汕语音校对系统</title>
+    <style>
+        /* 原有样式保留 */
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        h2 {
+            margin-top: 30px;
+            color: #444;
+        }
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        a {
+            text-decoration: none;
+            color: #2196F3;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .hidden {
+            display: none;
+        }
+        .audio-entry {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .audio-entry audio {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        .correction-input {
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .submit-correction {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .submit-correction:hover {
+            background-color: #1976D2;
+        }
+        .speaker-info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #e3f2fd;
+            border-radius: 4px;
+        }
+        .status-bar {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px;
+            text-align: center;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            display: none;
+        }
+        .export-btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .export-btn:hover {
+            background-color: #388E3C;
+        }
+
+        /* 新增标语样式 */
+        .slogan {
+            text-align: center;
+            color: #666;
+            font-size: 1.2em;
+            margin: -10px 0 30px;
+            font-style: italic;
+            background: -webkit-linear-gradient(45deg, #2196F3, #4CAF50);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: fadeIn 1.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 原有样式继续 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 300px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .login-input {
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .login-btn {
+            width: 100%;
+            padding: 10px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .user-info {
+            float: right;
+            margin-top: -50px;
+        }
+        .logout-btn {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .switch-auth {
+            text-align: center;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        .switch-auth a {
+            color: #2196F3;
+            text-decoration: none;
+        }
+        .switch-auth a:hover {
+            text-decoration: underline;
+        }
+        
+        /* 登录注册按钮样式 */
+        .auth-buttons {
+            text-align: center;
+            margin-top: 20px;
+            margin-bottom: 20px;
+        }
+        .auth-btn {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 0 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .auth-btn:hover {
+            background-color: #1976D2;
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            .modal-content {
+                width: 90%;
+                margin: 30% auto;
+            }
+            .user-info {
+                float: none;
+                margin-top: 10px;
+                text-align: center;
+            }
+        }
+        
+        /* 新增样式 */
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+        .speed-btn {
+            background-color: #f0f0f0;
+            border: 1px solid #ddd;
+            padding: 5px 10px;
+            margin-right: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .speed-btn.active {
+            background-color: #2196F3;
+            color: white;
+            border-color: #2196F3;
+        }
+        .time-display {
+            margin-left: 10px;
+            font-family: monospace;
+        }
+        .corrector-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .stats-btn {
+            background-color: #FF9800;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .stats-btn:hover {
+            background-color: #F57C00;
+        }
+    </style>
+</head>
+<body>
+    <!-- 登录模态框 -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <h2>登录</h2>
+            <input type="text" id="username" class="login-input" placeholder="用户名">
+            <input type="password" id="password" class="login-input" placeholder="密码">
+            <button class="login-btn" onclick="login()">登录</button>
+            <p class="switch-auth">
+                没有账号？<a href="#" onclick="switchToRegister()">去注册</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- 注册模态框 -->
+    <div id="registerModal" class="modal">
+        <div class="modal-content">
+            <h2>注册</h2>
+            <input type="text" id="regUsername" class="login-input" placeholder="用户名">
+            <input type="password" id="regPassword" class="login-input" placeholder="密码">
+            <input type="password" id="regConfirmPassword" class="login-input" placeholder="确认密码">
+            <button class="login-btn" onclick="register()">注册</button>
+            <p class="switch-auth">
+                已有账号？<a href="#" onclick="switchToLogin()">去登录</a>
+            </p>
+        </div>
+    </div>
+
+    <h1>潮汕语音校对系统</h1>
+    <div class="slogan">弘扬潮汕文化 • 用AI重新定义直播</div>
+    
+    <!-- 用户信息区 -->
+    <div id="userInfo" class="user-info hidden">
+        欢迎, <span id="userDisplayName"></span>
+        <button class="logout-btn" onclick="logout()">退出</button>
+    </div>
+    
+    <!-- 登录注册按钮 -->
+    <div id="authButtons" class="auth-buttons">
+        <button class="auth-btn" onclick="showLoginModal()">登录</button>
+        <button class="auth-btn" onclick="switchToRegister()">注册</button>
+    </div>
+
+    <div class="status-bar" id="statusBar"></div>
+
+    <div class="control-panel">
+        <button class="export-btn" onclick="exportData()">导出数据</button>
+        <span id="progressStatus"></span>
+    </div>
+
+    <h2>待校对音频</h2>
+    <div id="audio-list">
+        <!-- 音频条目将通过 JavaScript 动态添加 -->
+    </div>
+    
+    <!-- 添加统计面板 -->
+    <div id="statistics-panel" class="hidden" style="margin-top: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;">
+        <h2>校对统计</h2>
+        <div id="statistics-content">
+            <div class="stat-item" style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <span class="stat-label">总音频数:</span>
+                <span class="stat-value" id="stat-total">0</span>
+            </div>
+            <div class="stat-item" style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <span class="stat-label">已校对:</span>
+                <span class="stat-value" id="stat-completed">0</span>
+            </div>
+            <div class="stat-item" style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <span class="stat-label">待校对:</span>
+                <span class="stat-value" id="stat-pending">0</span>
+            </div>
+            <div class="stat-item" style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                <span class="stat-label">完成率:</span>
+                <span class="stat-value" id="stat-rate">0%</span>
+            </div>
+        </div>
+        <div id="corrector-stats" style="margin-top: 15px;">
+            <h3>校对者贡献</h3>
+            <!-- 校对者统计将在这里动态添加 -->
+        </div>
+    </div>
+
+    <script>
+        // 用户状态管理
+        let currentUser = null;
+        let isLoggedIn = false;
+
+        // 检查登录状态
+        function checkLoginStatus() {
+            const token = localStorage.getItem('userToken');
+            if (!token) {
+                showLoginModal();
+                return false;
+            }
+            
+            // 如果已登录，隐藏登录注册按钮，显示用户信息
+            document.getElementById('authButtons').classList.add('hidden');
+            document.getElementById('userInfo').classList.remove('hidden');
+            return true;
+        }
+
+        // 显示登录窗口
+        function showLoginModal() {
+            document.getElementById('registerModal').style.display = 'none';
+            document.getElementById('loginModal').style.display = 'block';
+        }
+
+        // 切换到注册页面
+        function switchToRegister() {
+            document.getElementById('loginModal').style.display = 'none';
+            document.getElementById('registerModal').style.display = 'block';
+        }
+
+        // 切换到登录页面
+        function switchToLogin() {
+            document.getElementById('registerModal').style.display = 'none';
+            document.getElementById('loginModal').style.display = 'block';
+        }
+
+        // 注册处理
+        async function register() {
+            const username = document.getElementById('regUsername').value;
+            const password = document.getElementById('regPassword').value;
+            const confirmPassword = document.getElementById('regConfirmPassword').value;
+
+            // 基本验证
+            if (!username || !password || !confirmPassword) {
+                alert('请填写所有字段');
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                alert('两次输入的密码不一致');
+                return;
+            }
+
+            if (password.length < 6) {
+                alert('密码长度至少6位');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username,
+                        password
+                    })
+                });
+
+                if (response.ok) {
+                    alert('注册成功！请登录');
+                    switchToLogin();
+                    // 清空注册表单
+                    document.getElementById('regUsername').value = '';
+                    document.getElementById('regPassword').value = '';
+                    document.getElementById('regConfirmPassword').value = '';
+                } else {
+                    const data = await response.json();
+                    alert(data.message || '注册失败，请重试');
+                }
+            } catch (error) {
