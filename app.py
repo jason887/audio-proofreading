@@ -8,7 +8,15 @@ from datetime import datetime
 import json
 import secrets
 import hashlib
+import uuid
 from functools import wraps
+import oss2
+from aliyunsdkcore.client import AcsClient
+from aliyunsdkcore.acs_exception.exceptions import ClientException, ServerException
+from aliyunsdkcore.request import CommonRequest
+import time
+import base64
+import requests  # 新增：用于调用Whisper API [[1]](#__1)
 
 app = Flask(__name__)
 CORS(app)
@@ -38,6 +46,24 @@ if not os.path.exists(CORRECTIONS_FILE):
     with open(CORRECTIONS_FILE, 'w') as f:
         json.dump([], f)
 
+# 阿里云配置
+ACCESS_KEY_ID = 'YOUR_ACCESS_KEY_ID'
+ACCESS_KEY_SECRET = 'YOUR_ACCESS_KEY_SECRET'
+OSS_ENDPOINT = 'oss-cn-shenzhen.aliyuncs.com'  # 根据您的OSS区域修改
+OSS_BUCKET_NAME = 'coze-test-jason'
+ISI_REGION = 'cn-shanghai'  # 智能语音交互服务区域
+
+# Whisper ASR配置 [[2]](#__2)
+WHISPER_API_URL = "http://localhost:9000/asr"  # 本地Whisper服务地址，根据实际部署修改
+USE_WHISPER = True  # 设置为True使用Whisper，False使用阿里云语音识别
+
+# 初始化OSS客户端
+auth = oss2.Auth(ACCESS_KEY_ID, ACCESS_KEY_SECRET)
+bucket = oss2.Bucket(auth, OSS_ENDPOINT, OSS_BUCKET_NAME)
+
+# 初始化智能语音交互客户端
+isi_client = AcsClient(ACCESS_KEY_ID, ACCESS_KEY_SECRET, ISI_REGION)
+
 # Token验证装饰器
 def token_required(f):
     @wraps(f)
@@ -63,6 +89,141 @@ def token_required(f):
 
         return f(*args, **kwargs)
     return decorated
+
+# 上传文件到OSS
+def upload_to_oss(local_file_path, oss_path):
+    try:
+        # 上传文件到OSS
+        result = bucket.put_object_from_file(oss_path, local_file_path)
+        # 生成可访问的URL
+        url = f"https://{OSS_BUCKET_NAME}.{OSS_ENDPOINT}/{oss_path}"
+        logger.info(f"文件上传成功: {url}")
+        return url
+    except Exception as e:
+        logger.error(f"上传文件到OSS失败: {str(e)}")
+        raise e
+
+# Whisper语音识别函数 [[3]](#__3)
+def whisper_speech_to_text(audio_url):
+    try:
+        # 调用Whisper API
+        payload = {"audio_url": audio_url}
+        response = requests.post(WHISPER_API_URL, json=payload)
+        
+        if response.status_code == 200:
+            result = response.json()
+            return {
+                'full_text': result.get('text', ''),
+                'sentences': result.get('segments', [])
+            }
+        else:
+            logger.error(f"Whisper API调用失败: {response.text}")
+            return {"error": f"识别失败: {response.text}"}
+    except Exception as e:
+        logger.error(f"Whisper语音识别出错: {str(e)}")
+        return {"error": str(e)}
+
+# 阿里云语音识别函数
+def speech_to_text(audio_url):
+    try:
+        # 创建录音文件识别请求
+        request = CommonRequest()
+        request.set_domain('filetrans.cn-shanghai.aliyuncs.com')
+        request.set_version('2018-08-17')
+        request.set_product('nls-filetrans')
+        request.set_action_name('SubmitTask')
+        request.set_method('POST')
+        
+        # 设置录音文件识别参数
+        task = {
+            "appkey": "YOUR_ISI_APPKEY",  # 您的智能语音交互应用的AppKey
+            "file_link": audio_url,
+            "version": "4.0",
+            "enable_words": True,
+            "enable_sample_rate_adaptive": True
+        }
+        
+        task_str = json.dumps(task)
+        request.add_body_params('Task', task_str)
+        
+        # 提交录音文件识别请求
+        response = isi_client.do_action_with_exception(request)
+        response_json = json.loads(response.decode('utf-8'))
+        
+        if 'TaskId' not in response_json:
+            return {"error": "提交识别任务失败"}
+        
+        task_id = response_json['TaskId']
+        logger.info(f"识别任务提交成功，任务ID: {task_id}")
+        
+        # 轮询获取识别结果
+        max_retry = 10
+        retry_count = 0
+        while retry_count < max_retry:
+            time.sleep(5)  # 等待5秒再查询结果
+            
+            get_result_request = CommonRequest()
+            get_result_request.set_domain('filetrans.cn-shanghai.aliyuncs.com')
+            get_result_request.set_version('2018-08-17')
+            get_result_request.set_product('nls-filetrans')
+            get_result_request.set_action_name('GetTaskResult')
+            get_result_request.set_method('POST')
+            get_result_request.add_body_params('TaskId', task_id)
+            
+            result_response = isi_client.do_action_with_exception(get_result_request)
+            result_json = json.loads(result_response.decode('utf-8'))
+            
+            status = result_json.get('StatusText')
+            if status == 'SUCCESS':
+                # 识别成功，返回结果
+                result = result_json.get('Result', {})
+                sentences = []
+                full_text = ""
+                
+                # 解析识别结果
+                for sentence in result.get('Sentences', []):
+                    sentences.append({
+                        'text': sentence.get('Text', ''),
+                        'begin_time': sentence.get('BeginTime', 0),
+                        'end_time': sentence.get('EndTime', 0)
+                    })
+                    full_text += sentence.get('Text', '') + " "
+                
+                return {
+                    'full_text': full_text.strip(),
+                    'sentences': sentences
+                }
+            elif status == 'RUNNING' or status == 'QUEUEING':
+                # 任务仍在进行中，继续等待
+                retry_count += 1
+                continue
+            else:
+                # 识别失败
+                return {"error": f"识别失败，状态: {status}"}
+        
+        return {"error": "识别超时，请稍后重试"}
+    
+    except Exception as e:
+        logger.error(f"语音识别出错: {str(e)}")
+        return {"error": str(e)}
+
+# 获取OSS中的音频文件列表
+def get_oss_audio_files(prefix="audio/"):
+    try:
+        audio_files = []
+        for obj in oss2.ObjectIterator(bucket, prefix=prefix):
+            if obj.key.endswith(('.wav', '.mp3', '.ogg')):
+                url = f"https://{OSS_BUCKET_NAME}.{OSS_ENDPOINT}/{obj.key}"
+                audio_files.append({
+                    'key': obj.key,
+                    'url': url,
+                    'size': obj.size,
+                    'last_modified': obj.last_modified
+                })
+        return audio_files
+    except Exception as e:
+        logger.error(f"获取OSS音频文件列表失败: {str(e)}")
+        return []
 
 # 首页路由
 @app.route('/')
@@ -209,55 +370,4 @@ def analyze_audio():
         
         # 保存上传的文件
         file.save(filepath)
-        logger.info(f"File saved to {filepath}")
-
-        try:
-            # 使用 soundfile 加载音频文件
-            audio_data, sample_rate = sf.read(filepath)
-            
-            # 获取音频信息
-            duration_seconds = len(audio_data) / sample_rate
-            channels = 1 if len(audio_data.shape) == 1 else audio_data.shape[1]
-            frame_rate = sample_rate
-            
-            # 计算最大振幅
-            max_amplitude = float(np.max(np.abs(audio_data)))
-            
-            # 计算RMS值作为响度的替代
-            rms = np.sqrt(np.mean(np.square(audio_data)))
-            # 将RMS转换为dB
-            loudness = 20 * np.log10(rms) if rms > 0 else -96.0
-
-            # 准备返回数据
-            audio_info = {
-                'filename': file.filename,
-                'duration': duration_seconds,
-                'channels': channels,
-                'frame_rate': frame_rate,
-                'sample_width': audio_data.dtype.itemsize,
-                'max_amplitude': max_amplitude,
-                'loudness_dbfs': loudness
-            }
-
-            return jsonify(audio_info)
-
-        except Exception as e:
-            logger.error(f"Error processing audio file: {str(e)}")
-            return jsonify({'error': f'Error processing audio file: {str(e)}'}), 500
-
-        finally:
-            # 清理上传的文件
-            if os.path.exists(filepath):
-                os.remove(filepath)
-
-    except Exception as e:
-        logger.error(f"Server error: {str(e)}")
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
-
-# 健康检查接口
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'healthy'}), 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+        logger.info(f"File saved to

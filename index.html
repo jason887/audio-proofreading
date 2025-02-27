@@ -182,6 +182,18 @@
         .switch-auth a:hover {
             text-decoration: underline;
         }
+        .refresh-btn {
+            background-color: #FF9800;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        .refresh-btn:hover {
+            background-color: #F57C00;
+        }
         @media (max-width: 768px) {
             body {
                 padding: 10px;
@@ -238,6 +250,7 @@
     <div class="status-bar" id="statusBar"></div>
 
     <div class="control-panel">
+        <button class="refresh-btn" onclick="loadOssAudioList()">刷新音频列表</button>
         <button class="export-btn" onclick="exportData()">导出数据</button>
         <span id="progressStatus"></span>
     </div>
@@ -245,6 +258,7 @@
     <h2>待校对音频</h2>
     <div id="audio-list">
         <!-- 音频条目将通过 JavaScript 动态添加 -->
+        <p>加载中...</p>
     </div>
 
     <script>
@@ -259,6 +273,16 @@
                 showLoginModal();
                 return false;
             }
+            
+            // 显示用户信息
+            const username = localStorage.getItem('username');
+            if (username) {
+                currentUser = username;
+                isLoggedIn = true;
+                document.getElementById('userInfo').classList.remove('hidden');
+                document.getElementById('userDisplayName').textContent = username;
+            }
+            
             return true;
         }
 
@@ -292,243 +316,4 @@
                 return;
             }
 
-            if (password !== confirmPassword) {
-                alert('两次输入的密码不一致');
-                return;
-            }
-
-            if (password.length < 6) {
-                alert('密码长度至少6位');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/register', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        username,
-                        password
-                    })
-                });
-
-                if (response.ok) {
-                    alert('注册成功！请登录');
-                    switchToLogin();
-                    // 清空注册表单
-                    document.getElementById('regUsername').value = '';
-                    document.getElementById('regPassword').value = '';
-                    document.getElementById('regConfirmPassword').value = '';
-                } else {
-                    const data = await response.json();
-                    alert(data.message || '注册失败，请重试');
-                }
-            } catch (error) {
-                console.error('注册错误:', error);
-                alert('注册出错，请稍后重试');
-            }
-        }
-
-        // 登录处理
-        async function login() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password })
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    localStorage.setItem('userToken', data.token);
-                    currentUser = username;
-                    isLoggedIn = true;
-                    document.getElementById('loginModal').style.display = 'none';
-                    document.getElementById('userInfo').classList.remove('hidden');
-                    document.getElementById('userDisplayName').textContent = username;
-                    loadAudioList();
-                } else {
-                    alert('登录失败，请检查用户名和密码');
-                }
-            } catch (error) {
-                console.error('登录错误:', error);
-                alert('登录出错，请稍后重试');
-            }
-        }
-
-        // 退出登录
-        function logout() {
-            localStorage.removeItem('userToken');
-            currentUser = null;
-            isLoggedIn = false;
-            document.getElementById('userInfo').classList.add('hidden');
-            showLoginModal();
-        }
-
-        // 音频数据结构
-        const audioEntry = {
-            id: String,
-            audioUrl: String,
-            originalText: String,
-            correctedText: String,
-            timestamp: String
-        };
-
-        // 创建音频条目
-        function createAudioEntry(audioItem) {
-            const entryDiv = document.createElement('div');
-            entryDiv.classList.add('audio-entry');
-            entryDiv.innerHTML = `
-                <audio controls src="${audioItem.audioUrl}"></audio>
-                <p>原文：${audioItem.originalText}</p>
-                <input type="text" class="correction-input" 
-                       placeholder="请输入更正后的文本" 
-                       value="${audioItem.correctedText}" 
-                       data-audio-id="${audioItem.id}">
-                <button class="submit-correction" data-audio-id="${audioItem.id}">
-                    提交更正
-                </button>
-            `;
-            return entryDiv;
-        }
-
-        // 加载音频列表
-        async function loadAudioList() {
-            if (!checkLoginStatus()) return;
-
-            try {
-                const response = await fetch('/api/audio-list', {
-                    headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('userToken')}`
-                    }
-                });
-                
-                if (response.ok) {
-                    const audioData = await response.json();
-                    const audioList = document.getElementById('audio-list');
-                    audioList.innerHTML = '';
-                    
-                    audioData.forEach(item => {
-                        if (!item.correctedText) { // 只显示未校对的音频
-                            const entryElement = createAudioEntry(item);
-                            audioList.appendChild(entryElement);
-                        }
-                    });
-                    
-                    updateProgress(audioData);
-                }
-            } catch (error) {
-                console.error('加载音频列表失败:', error);
-                showStatus('加载音频列表失败，请刷新页面重试');
-            }
-        }
-
-        // 提交更正
-        async function handleSubmitCorrection(audioId, correctedText) {
-            if (!checkLoginStatus()) return;
-
-            try {
-                const response = await fetch('/api/submit-correction', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('userToken')}`
-                    },
-                    body: JSON.stringify({
-                        id: audioId,
-                        correctedText: correctedText,
-                        corrector: currentUser,
-                        timestamp: new Date().toISOString()
-                    })
-                });
-
-                if (response.ok) {
-                    showStatus('更正已提交成功！');
-                    // 移除已完成的音频条目
-                    const audioEntry = document.querySelector(`[data-audio-id="${audioId}"]`).parentNode;
-                    audioEntry.remove();
-                    loadAudioList(); // 刷新列表
-                } else {
-                    showStatus('提交失败，请重试');
-                }
-            } catch (error) {
-                console.error('提交更正时出错:', error);
-                showStatus('提交失败，请重试');
-            }
-        }
-
-        // 导出数据
-        async function exportData() {
-            if (!checkLoginStatus()) return;
-
-            try {
-                const response = await fetch('/api/export', {
-                    headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('userToken')}`
-                    }
-                });
-
-                if (response.ok) {
-                    const blob = await response.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'correction_data.json';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    showStatus('数据导出成功！');
-                }
-            } catch (error) {
-                console.error('导出数据失败:', error);
-                showStatus('导出失败，请重试');
-            }
-        }
-
-        // 显示状态消息
-        function showStatus(message) {
-            const statusBar = document.getElementById('statusBar');
-            statusBar.textContent = message;
-            statusBar.style.display = 'block';
-            setTimeout(() => {
-                statusBar.style.display = 'none';
-            }, 3000);
-        }
-
-        // 更新进度
-        function updateProgress(audioData) {
-            const total = audioData.length;
-            const completed = audioData.filter(item => item.correctedText).length;
-            document.getElementById('progressStatus').textContent = 
-                `进度: ${completed}/${total} (${Math.round(completed/total*100)}%)`;
-        }
-
-        // 事件监听器
-        document.getElementById('audio-list').addEventListener('click', (event) => {
-            if (event.target.classList.contains('submit-correction')) {
-                const audioId = event.target.dataset.audioId;
-                const inputField = event.target.previousElementSibling;
-                const correctedText = inputField.value;
-                handleSubmitCorrection(audioId, correctedText);
-            }
-        });
-
-        // 页面加载完成后检查登录状态
-        document.addEventListener('DOMContentLoaded', () => {
-            if (!checkLoginStatus()) {
-                showLoginModal();
-            } else {
-                loadAudioList();
-            }
-        });
-    </script>
-</body>
-</html>
+            if
