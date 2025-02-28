@@ -23,7 +23,7 @@ except ImportError:
 
 # 配置
 BASE_URL = "http://localhost:9000"  # 基础URL
-API_URL = f"{BASE_URL}/v1/asr"     # 正确的ASR端点
+API_URL = f"{BASE_URL}/asr"         # 修正：使用正确的ASR端点（移除v1前缀）
 # 修复路径格式问题
 AUDIO_DIR = "D:\\my_video_project\\output"  # 使用正确的Windows路径格式
 OUTPUT_DIR = "D:\\my_video_project\\transcripts"
@@ -37,8 +37,8 @@ def check_api_available():
     available = False
     message = ""
     
-    # 尝试不同的健康检查端点
-    health_endpoints = ["/health", "/v1/health", "/"]
+    # 修正：尝试更合适的健康检查端点
+    health_endpoints = ["/openapi.json", "/", "/health"]
     
     for endpoint in health_endpoints:
         try:
@@ -80,16 +80,21 @@ def process_audio(audio_file):
         print(f"正在处理: {filename}")
         with open(audio_file, "rb") as f:
             files = {"audio_file": (filename, f, "audio/wav")}
-            response = requests.post(API_URL, files=files)
+            data = {}
+            response = requests.post(API_URL, files=files, data=data)
         
         print(f"响应状态码: {response.status_code}")
-        try:
-            print(f"响应内容预览: {response.text[:200]}")
-        except:
-            print("无法显示响应内容")
-            
+        
         if response.status_code == 200:
-            result = response.json()
+            # 尝试解析JSON，如果失败则作为纯文本处理
+            try:
+                result = response.json()
+                print(f"响应内容预览: {str(result)[:200]}")
+            except json.JSONDecodeError:
+                # 纯文本响应处理
+                text = response.text.strip()
+                print(f"响应内容预览: {text[:200]}")
+                result = {"text": text}
             
             # 保存结果
             with open(output_file, "w", encoding="utf-8") as f:
@@ -103,9 +108,6 @@ def process_audio(audio_file):
     except requests.RequestException as e:
         print(f"网络错误: {filename}, {str(e)}")
         return {"file": filename, "status": "error", "message": f"网络错误: {str(e)}"}
-    except json.JSONDecodeError as e:
-        print(f"JSON解析错误: {filename}, {str(e)}")
-        return {"file": filename, "status": "error", "message": f"JSON解析错误: {str(e)}"}
     except Exception as e:
         print(f"处理错误: {filename}, {str(e)}")
         return {"file": filename, "status": "error", "message": str(e)}
