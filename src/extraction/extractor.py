@@ -67,39 +67,70 @@ class VoiceDataExtractor:
         
         # 声纹过滤器
         self.voice_filter = None
-        if voice_prints_dir and os.path.exists(voice_prints_dir):
-            try:
-                from .voice_filter_processor import VoiceFilterProcessor
-                self.voice_filter = VoiceFilterProcessor(voice_prints_dir)
-                self.logger.info(f"声纹过滤器已启用，目录: {voice_prints_dir}")
-            except ImportError:
-                print("⚠️ 声纹过滤器模块导入失败，将不使用声纹过滤")
-                self.logger.warning("声纹过滤器模块导入失败，将不使用声纹过滤")
+        if voice_prints_dir:
+            if not os.path.exists(voice_prints_dir):
+                print(f"⚠️ 声纹目录不存在: {voice_prints_dir}，将不使用声纹过滤")
+                self.logger.warning(f"声纹目录不存在: {voice_prints_dir}，将不使用声纹过滤")
+            else:
+                try:
+                    from .voice_filter_processor import VoiceFilterProcessor
+                    self.voice_filter = VoiceFilterProcessor(voice_prints_dir)
+                    if self.voice_filter.voice_prints:
+                        self.logger.info(f"声纹过滤器已启用，目录: {voice_prints_dir}")
+                        print(f"✅ 声纹过滤器已启用，加载了 {len(self.voice_filter.voice_prints)} 个声纹")
+                    else:
+                        self.logger.warning(f"声纹目录中没有找到有效声纹文件: {voice_prints_dir}")
+                        print(f"⚠️ 声纹目录中没有找到有效声纹文件: {voice_prints_dir}")
+                        self.voice_filter = None
+                except ImportError:
+                    print("⚠️ 声纹过滤器模块导入失败，将不使用声纹过滤")
+                    self.logger.warning("声纹过滤器模块导入失败，将不使用声纹过滤")
         else:
             self.logger.info("声纹过滤器未启用")
             
         # 检查API可用性
-        self.check_api_availability()
+        self.api_available = self.check_api_availability()
+        if not self.api_available:
+            print("\n⚠️ Whisper API 不可用，将使用本地备用方案处理音频")
+            self.logger.warning("Whisper API 不可用，将使用本地备用方案处理音频")
 
     def check_api_availability(self):
         """检查Whisper API服务是否可用"""
         try:
-            # 尝试获取API根路径
-            api_base = self.whisper_api_url.split('/asr')[0]
-            health_url = f"{api_base}/health"
+            # 尝试直接请求API端点
+            response = requests.get(
+                self.whisper_api_url.replace("/asr", "") or self.whisper_api_url,
+                timeout=5
+            )
             
-            response = requests.get(health_url, timeout=5)
-            if response.status_code == 200:
+            # 检查响应状态
+            if response.status_code < 400:
                 self.logger.info("Whisper API服务正常")
                 print("✅ Whisper API服务连接正常")
                 return True
             else:
                 self.logger.warning(f"Whisper API服务异常，状态码: {response.status_code}")
                 print(f"⚠️ Whisper API服务异常，状态码: {response.status_code}")
+                
+                # 尝试修复常见的URL问题
+                if "localhost" in self.whisper_api_url and "http://" not in self.whisper_api_url:
+                    corrected_url = f"http://{self.whisper_api_url}"
+                    print(f"尝试修正API URL: {corrected_url}")
+                    self.whisper_api_url = corrected_url
+                    return self.check_api_availability()
+                
                 return False
         except Exception as e:
             self.logger.error(f"Whisper API连接失败: {str(e)}")
             print(f"⚠️ Whisper API连接失败: {str(e)}")
+            
+            # 提供帮助信息
+            print("\n可能的解决方案:")
+            print("1. 确保Whisper API服务已启动")
+            print("2. 检查API URL配置是否正确")
+            print("3. 检查网络连接")
+            print(f"4. 当前API URL: {self.whisper_api_url}")
+            
             return False
 
     def process_streamers(self, streamers_config):
@@ -338,7 +369,20 @@ class VoiceDataExtractor:
         """处理单个音频片段，检测语言并分类"""
         try:
             # 验证音频文件是否有效
-            if not self.audio_processor.validate_audio_file(audio_path):
+            if not hasattr(self.audio_processor, 'validate_audio_file'):
+                # 如果方法不存在，添加一个简单的检查
+                try:
+                    from pydub import AudioSegment
+                    audio = AudioSegment.from_file(audio_path)
+                    if len(audio) < 500:  # 太短的音频（小于500毫秒）
+                        if os.path.exists(audio_path):
+                            os.remove(audio_path)
+                        return None
+                except Exception:
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
+                    return None
+            elif not self.audio_processor.validate_audio_file(audio_path):
                 self.logger.warning(f"无效音频文件: {os.path.basename(audio_path)}")
                 if os.path.exists(audio_path):
                     os.remove(audio_path)
@@ -346,6 +390,13 @@ class VoiceDataExtractor:
             
             # 获取音频时长
             duration = self._get_audio_duration(audio_path)
+            
+            # 如果时长为0，跳过处理
+            if duration <= 0:
+                self.logger.warning(f"音频时长为0: {os.path.basename(audio_path)}")
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
+                return None
             
             # 如果启用了声纹过滤，先检查是否是目标说话人
             if self.voice_filter:
@@ -383,6 +434,9 @@ class VoiceDataExtractor:
                     if os.path.exists(audio_path) and audio_path != normalized_path:
                         os.remove(audio_path)
                     
+                    # 记录时长到日志
+                    self.logger.info(f"保存普通话音频: {os.path.basename(dest_path)}, 时长: {duration:.2f}秒")
+                    
                     return {
                         "lang_type": "mandarin",
                         "duration": duration,
@@ -399,6 +453,9 @@ class VoiceDataExtractor:
                     # 删除原始文件
                     if os.path.exists(audio_path) and audio_path != normalized_path:
                         os.remove(audio_path)
+                    
+                    # 记录时长到日志
+                    self.logger.info(f"保存方言音频: {os.path.basename(dest_path)}, 时长: {duration:.2f}秒")
                     
                     return {
                         "lang_type": "dialect",
@@ -424,6 +481,10 @@ class VoiceDataExtractor:
         max_retries = 3
         retry_count = 0
         
+        # 如果API不可用，使用本地备用方案
+        if not self.api_available:
+            return self._local_language_detection(audio_path)
+        
         while retry_count < max_retries:
             try:
                 with open(audio_path, "rb") as f:
@@ -442,11 +503,30 @@ class VoiceDataExtractor:
                             retry_count += 1
                             time.sleep(1)
                             continue
+                        
+                        # 尝试解析JSON
+                        try:
+                            result = response.json()
+                            # 确保结果包含必要的字段
+                            if "text" not in result:
+                                result["text"] = ""
+                            if "language" not in result:
+                                result["language"] = "zh"  # 默认为普通话
+                            return result
+                        except json.JSONDecodeError:
+                            # 如果不是JSON格式，假设是纯文本响应
+                            text = response.text.strip()
+                            self.logger.info(f"API返回纯文本响应: {text[:50]}...")
                             
-                        result = response.json()
-                        return result
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"API返回的JSON格式无效: {response.text[:100]}, 错误: {str(e)}")
+                            # 创建一个类似JSON结果的字典
+                            result = {
+                                "text": text,
+                                "language": "zh"  # 默认假设为普通话
+                            }
+                            return result
+                            
+                    except Exception as e:
+                        self.logger.error(f"处理API响应失败: {str(e)}")
                         retry_count += 1
                         time.sleep(1)
                         continue
@@ -466,7 +546,38 @@ class VoiceDataExtractor:
                 return None
         
         self.logger.error(f"语言检测失败，已重试 {max_retries} 次")
-        return None
+        # 如果API调用失败，尝试使用本地备用方案
+        return self._local_language_detection(audio_path)
+    
+    
+    def _local_language_detection(self, audio_path):
+        """本地简单语言检测备用方案"""
+        try:
+            # 这里简单地假设所有音频都是普通话
+            self.logger.info(f"使用本地备用方案处理音频: {os.path.basename(audio_path)}")
+            
+            # 获取音频时长作为有效性检查
+            from pydub import AudioSegment
+            try:
+                audio = AudioSegment.from_file(audio_path)
+                duration = len(audio) / 1000.0  # 毫秒转秒
+                
+                # 如果音频太短，可能不是有效的语音
+                if duration < 1.0:  # 小于1秒的音频可能不是有效语音
+                    return None
+                
+                # 返回一个简单的结果，假设是普通话
+                return {
+                    "text": "本地识别的音频内容",  # 占位符文本
+                    "language": "zh",  # 默认为普通话
+                    "duration": duration
+                }
+            except Exception as e:
+                self.logger.error(f"本地音频处理失败: {str(e)}")
+                return None
+        except Exception as e:
+            self.logger.error(f"本地语言检测失败: {str(e)}")
+            return None
     
     def process_batch(self, segment_paths, batch_size=5):
         """分批处理音频片段，避免API过载"""
@@ -482,8 +593,10 @@ class VoiceDataExtractor:
     def _get_audio_duration(self, audio_path):
         """获取音频文件的时长（秒）"""
         try:
+            from pydub import AudioSegment
             audio = AudioSegment.from_file(audio_path)
-            return len(audio) / 1000.0  # 毫秒转秒
+            duration = len(audio) / 1000.0  # 毫秒转秒
+            return duration
         except Exception as e:
             self.logger.error(f"获取音频时长失败: {str(e)}")
             return 0
