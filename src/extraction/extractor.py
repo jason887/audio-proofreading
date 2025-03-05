@@ -133,6 +133,7 @@ class VoiceDataExtractor:
             
             return False
 
+    
     def process_streamers(self, streamers_config):
         """处理多个主播的数据提取任务"""
         if not streamers_config:
@@ -171,6 +172,22 @@ class VoiceDataExtractor:
                 
                 min_duration = streamer.get('min_mandarin_minutes', 10) * 60
                 max_duration = streamer.get('max_mandarin_minutes', 15) * 60
+                
+                # 检查是否已经提取了足够的素材
+                metadata_path = os.path.join(output_dir, "metadata.json")
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r', encoding='utf-8') as f:
+                            previous_result = json.load(f)
+                        
+                        if previous_result.get("sufficient", False) and previous_result.get("mandarin_duration", 0) >= min_duration:
+                            self.logger.info(f"主播 {streamer_id} 已有足够素材 ({previous_result['mandarin_duration']/60:.2f}分钟)，跳过处理")
+                            print(f"⏩ 主播 {streamer_id} 已有足够素材 ({previous_result['mandarin_duration']/60:.2f}分钟)，跳过处理")
+                            results[streamer_id] = previous_result
+                            pbar.update(1)
+                            continue
+                    except Exception as e:
+                        self.logger.warning(f"读取主播 {streamer_id} 元数据失败: {str(e)}，将重新处理")
                 
                 self.logger.info(f"开始处理主播: {streamer_id}")
                 print(f"\n{'='*50}\n开始处理主播: {streamer_id}\n{'='*50}")
@@ -217,6 +234,7 @@ class VoiceDataExtractor:
                 print(f"⚠️ 保存提取报告失败: {str(e)}")
                 
         return results
+
 
     def extract_until_sufficient(self, videos_dir, output_dir, streamer_id, min_duration, max_duration):
         """处理视频直到提取到足够的普通话素材"""
